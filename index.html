@@ -457,18 +457,16 @@ async function togglePlay(item, row) {
   row.appendChild(audioWrap);
 
   try {
-    // <audio src=直接URL> はGAS側がRangeリクエストに対応していないため
-    // iOS Safariで再生エラーになることがある。fetchで全体を取得してから
-    // ローカルのBlob URLとして再生することで回避する。
+    // 音声データはJSON(base64)経由で取得する
+    // （バイナリを直接fetchするとGAS側のCORSの都合で失敗することがあるため、
+    //   一覧取得などと同じJSON方式に統一している）
     const url = GAS_URL + '?action=file&fileId=' + encodeURIComponent(item.fileId) + '&idToken=' + encodeURIComponent(idToken);
     const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const blob = await res.blob();
-    if (blob.type && blob.type.indexOf('text') !== -1) {
-      // 認証エラー時などはテキストが返ってくる
-      const text = await blob.text();
-      throw new Error(text);
-    }
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '取得に失敗しました');
+
+    const bytes = base64ToBytes_(data.base64);
+    const blob = new Blob([bytes], { type: data.mimeType || 'audio/mp4' });
     const objectUrl = URL.createObjectURL(blob);
 
     audioWrap.textContent = '';
@@ -480,6 +478,13 @@ async function togglePlay(item, row) {
   } catch (err) {
     audioWrap.textContent = '再生に失敗しました: ' + err.message;
   }
+}
+
+function base64ToBytes_(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 async function deleteItem(item, row) {
