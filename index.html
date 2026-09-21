@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>音読記録</title>
+
+<!-- iOSホーム画面追加用 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="音読記録">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#c0533e">
+
+<style>
+  :root{
+    --bg:#f5f2ea;
+    --card:#ffffff;
+    --ink:#2e2a25;
+    --sub:#7a7365;
+    --accent:#c0533e;
+    --accent-dark:#9c4232;
+    --line:#e6e0d4;
+    --danger:#b23b3b;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  header{
+    padding:18px 20px 10px;
+    text-align:center;
+  }
+  header h1{
+    font-size:19px;
+    margin:0;
+    letter-spacing:.02em;
+  }
+  #signin-bar{
+    display:flex;
+    justify-content:center;
+    padding:8px 16px 4px;
+  }
+  #whoami{
+    text-align:center;
+    font-size:12px;
+    color:var(--sub);
+    padding-bottom:6px;
+  }
+
+  main{
+    max-width:480px;
+    margin:0 auto;
+    padding:8px 16px 40px;
+  }
+
+  #recorder-card{
+    background:var(--card);
+    border-radius:18px;
+    padding:22px 18px 20px;
+    text-align:center;
+    box-shadow:0 1px 3px rgba(0,0,0,.06);
+    margin-bottom:22px;
+  }
+  #rec-btn{
+    width:96px;height:96px;
+    border-radius:50%;
+    border:none;
+    background:var(--accent);
+    color:#fff;
+    font-size:14px;
+    font-weight:600;
+    box-shadow:0 4px 14px rgba(192,83,62,.35);
+    display:flex;align-items:center;justify-content:center;
+    margin:6px auto 14px;
+    transition:transform .12s ease, background .2s ease;
+  }
+  #rec-btn:active{transform:scale(.96);}
+  #rec-btn.recording{
+    background:var(--danger);
+    animation:pulse 1.4s infinite;
+  }
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(178,59,59,.45);}
+    70%{box-shadow:0 0 0 16px rgba(178,59,59,0);}
+    100%{box-shadow:0 0 0 0 rgba(178,59,59,0);}
+  }
+  #rec-timer{
+    font-variant-numeric:tabular-nums;
+    font-size:26px;
+    font-weight:600;
+    margin-bottom:2px;
+  }
+  #rec-status{
+    font-size:13px;
+    color:var(--sub);
+  }
+  #save-row{
+    display:none;
+    gap:10px;
+    justify-content:center;
+    margin-top:14px;
+  }
+  #save-row button{
+    padding:10px 20px;
+    border-radius:10px;
+    border:none;
+    font-size:14px;
+    font-weight:600;
+  }
+  #save-btn{background:var(--accent);color:#fff;}
+  #discard-btn{background:#eee;color:var(--ink);}
+
+  .date-heading{
+    font-size:13px;
+    color:var(--sub);
+    font-weight:600;
+    margin:18px 4px 8px;
+  }
+  .rec-row{
+    background:var(--card);
+    border-radius:14px;
+    padding:10px 12px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:8px;
+    box-shadow:0 1px 2px rgba(0,0,0,.05);
+  }
+  .row-actions{
+    display:flex;
+    gap:6px;
+  }
+  .icon-btn{
+    width:38px;height:38px;
+    border-radius:10px;
+    border:none;
+    background:var(--bg);
+    font-size:16px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .icon-btn.play{color:var(--accent-dark);}
+  .icon-btn.del{color:var(--danger);}
+  .row-meta{
+    flex:1;
+    min-width:0;
+  }
+  .row-time{font-size:15px;font-weight:600;}
+  .row-by{font-size:11px;color:var(--sub);}
+  .row-audio{
+    flex-basis:100%;
+    margin-top:8px;
+  }
+  .row-audio audio{width:100%;}
+
+  #empty{
+    text-align:center;
+    color:var(--sub);
+    font-size:13px;
+    padding:24px 0;
+  }
+  #login-gate{
+    text-align:center;
+    color:var(--sub);
+    font-size:13px;
+    padding:30px 10px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📖 音読記録</h1>
+</header>
+<div id="signin-bar"></div>
+<div id="whoami"></div>
+
+<main>
+
+  <div id="recorder-card" style="display:none;">
+    <button id="rec-btn">録音開始</button>
+    <div id="rec-timer">00:00</div>
+    <div id="rec-status">ボタンを押すと録音がはじまります</div>
+    <div id="save-row">
+      <button id="discard-btn">やり直す</button>
+      <button id="save-btn">保存する</button>
+    </div>
+  </div>
+
+  <div id="login-gate">Googleアカウントでログインしてください</div>
+  <div id="list-area"></div>
+  <div id="empty" style="display:none;">まだ記録がありません</div>
+
+</main>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+/* ===================== 設定 ===================== */
+const GAS_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec'; // ← デプロイ後のURLに書き換える
+const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';               // ← Google Sign-InのクライアントID
+
+/* ===================== 状態 ===================== */
+let idToken = null;
+let userEmail = null;
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordStartAt = null;   // {dateStr, timeStr, ms}
+let timerInterval = null;
+let pendingBlob = null;
+let pendingMimeType = null;
+
+/* ===================== サインイン ===================== */
+window.onload = function () {
+  if (window.google && google.accounts) {
+    google.accounts.id.initialize({
+      client_id: CLIENT_ID,
+      callback: handleCredentialResponse,
+      auto_select: true
+    });
+    google.accounts.id.renderButton(
+      document.getElementById('signin-bar'),
+      { theme: 'outline', size: 'medium', shape: 'pill', text: 'signin_with' }
+    );
+    google.accounts.id.prompt();
+  }
+  registerServiceWorker();
+};
+
+function handleCredentialResponse(response) {
+  idToken = response.credential;
+  try {
+    const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+    userEmail = payload.email;
+  } catch (e) { userEmail = null; }
+
+  document.getElementById('login-gate').style.display = 'none';
+  document.getElementById('recorder-card').style.display = 'block';
+  document.getElementById('whoami').textContent = userEmail ? ('ログイン中: ' + userEmail) : '';
+
+  refreshList();
+}
+
+/* ===================== 録音 ===================== */
+function pickMimeType() {
+  const candidates = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'];
+  for (const c of candidates) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) {
+      return c;
+    }
+  }
+  return '';
+}
+
+document.getElementById('rec-btn').addEventListener('click', function () {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+});
+document.getElementById('discard-btn').addEventListener('click', function () {
+  pendingBlob = null;
+  document.getElementById('save-row').style.display = 'none';
+  document.getElementById('rec-status').textContent = 'ボタンを押すと録音がはじまります';
+  document.getElementById('rec-timer').textContent = '00:00';
+});
+document.getElementById('save-btn').addEventListener('click', function () {
+  if (!pendingBlob) return;
+  uploadRecording(pendingBlob, pendingMimeType, recordStartAt);
+});
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = pickMimeType();
+    recordedChunks = [];
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    pendingMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
+
+    const now = new Date();
+    recordStartAt = { dateStr: formatDate(now), timeStr: formatTime(now) };
+
+    mediaRecorder.ondataavailable = function (e) {
+      if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+    };
+    mediaRecorder.onstop = function () {
+      stream.getTracks().forEach(t => t.stop());
+      pendingBlob = new Blob(recordedChunks, { type: pendingMimeType });
+      document.getElementById('save-row').style.display = 'flex';
+      document.getElementById('rec-status').textContent = '保存しますか？';
+    };
+
+    mediaRecorder.start();
+    document.getElementById('rec-btn').textContent = '停止';
+    document.getElementById('rec-btn').classList.add('recording');
+    document.getElementById('rec-status').textContent = '録音中…';
+    document.getElementById('save-row').style.display = 'none';
+    startTimer();
+  } catch (err) {
+    alert('マイクを使用できませんでした: ' + err.message);
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+  document.getElementById('rec-btn').textContent = '録音開始';
+  document.getElementById('rec-btn').classList.remove('recording');
+  stopTimer();
+}
+
+function startTimer() {
+  const startedMs = Date.now();
+  timerInterval = setInterval(function () {
+    const sec = Math.floor((Date.now() - startedMs) / 1000);
+    const m = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    document.getElementById('rec-timer').textContent = m + ':' + s;
+  }, 250);
+}
+function stopTimer() {
+  clearInterval(timerInterval);
+}
+
+/* ===================== アップロード / 一覧 / 削除 ===================== */
+function blobToBase64(blob) {
+  return new Promise(function (resolve, reject) {
+    const reader = new FileReader();
+    reader.onloadend = function () {
+      const result = reader.result; // data:mime;base64,xxxx
+      resolve(result.substring(result.indexOf(',') + 1));
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function uploadRecording(blob, mimeType, startAt) {
+  document.getElementById('rec-status').textContent = '保存中…';
+  document.getElementById('save-row').style.display = 'none';
+  const base64 = await blobToBase64(blob);
+  try {
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // プリフライト回避
+      body: JSON.stringify({
+        action: 'upload',
+        idToken: idToken,
+        date: startAt.dateStr,
+        time: startAt.timeStr,
+        mimeType: mimeType,
+        base64: base64
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '保存に失敗しました');
+    document.getElementById('rec-status').textContent = '保存しました';
+    document.getElementById('rec-timer').textContent = '00:00';
+    pendingBlob = null;
+    refreshList();
+  } catch (err) {
+    alert('保存に失敗しました: ' + err.message);
+    document.getElementById('rec-status').textContent = 'ボタンを押すと録音がはじまります';
+  }
+}
+
+async function refreshList() {
+  if (!idToken) return;
+  try {
+    const url = GAS_URL + '?action=list&idToken=' + encodeURIComponent(idToken);
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '取得に失敗しました');
+    renderList(data.items);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderList(items) {
+  const area = document.getElementById('list-area');
+  area.innerHTML = '';
+  document.getElementById('empty').style.display = items.length ? 'none' : 'block';
+
+  const byDate = {};
+  const order = [];
+  items.forEach(function (it) {
+    if (!byDate[it.date]) { byDate[it.date] = []; order.push(it.date); }
+    byDate[it.date].push(it);
+  });
+
+  order.forEach(function (date) {
+    const h = document.createElement('div');
+    h.className = 'date-heading';
+    h.textContent = formatDateLabel(date);
+    area.appendChild(h);
+
+    byDate[date].forEach(function (it) {
+      area.appendChild(buildRow(it));
+    });
+  });
+}
+
+function buildRow(item) {
+  const row = document.createElement('div');
+  row.className = 'rec-row';
+  row.dataset.id = item.id;
+
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+
+  const playBtn = document.createElement('button');
+  playBtn.className = 'icon-btn play';
+  playBtn.textContent = '▶';
+  playBtn.title = '再生';
+  playBtn.addEventListener('click', function () { togglePlay(item, row); });
+
+  const delBtn = document.createElement('button');
+  delBtn.className = 'icon-btn del';
+  delBtn.textContent = '✕';
+  delBtn.title = '削除';
+  delBtn.addEventListener('click', function () { deleteItem(item, row); });
+
+  actions.appendChild(playBtn);
+  actions.appendChild(delBtn);
+
+  const meta = document.createElement('div');
+  meta.className = 'row-meta';
+  meta.innerHTML =
+    '<div class="row-time">' + item.time + '</div>' +
+    '<div class="row-by">' + (item.uploadedBy || '') + '</div>';
+
+  row.appendChild(actions);
+  row.appendChild(meta);
+  return row;
+}
+
+function togglePlay(item, row) {
+  let audioWrap = row.querySelector('.row-audio');
+  if (audioWrap) {
+    audioWrap.remove();
+    return;
+  }
+  audioWrap = document.createElement('div');
+  audioWrap.className = 'row-audio';
+  const audio = document.createElement('audio');
+  audio.controls = true;
+  audio.autoplay = true;
+  audio.src = GAS_URL + '?action=file&fileId=' + encodeURIComponent(item.fileId) + '&idToken=' + encodeURIComponent(idToken);
+  audioWrap.appendChild(audio);
+  row.appendChild(audioWrap);
+}
+
+async function deleteItem(item, row) {
+  if (!confirm(item.date + ' ' + item.time + ' の録音を削除しますか？')) return;
+  try {
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'delete', idToken: idToken, id: item.id })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '削除に失敗しました');
+    row.remove();
+  } catch (err) {
+    alert('削除に失敗しました: ' + err.message);
+  }
+}
+
+/* ===================== ユーティリティ ===================== */
+function formatDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + day;
+}
+function formatTime(d) {
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0');
+}
+function formatDateLabel(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const wd = ['日','月','火','水','木','金','土'][d.getDay()];
+  return dateStr + '（' + wd + '）';
+}
+
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(function () {});
+  }
+}
+</script>
+</body>
+</html>
