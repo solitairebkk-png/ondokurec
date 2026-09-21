@@ -201,8 +201,8 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 /* ===================== 設定 ===================== */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwLThrE-AymgO1ksrhl8Ri6cTs3gcZFRTWqyJa_YClh8HbtVEo5lO6a-ZtcK2mfT_ie/exec'; // ← デプロイ後のURLに書き換える
-const CLIENT_ID = '309341085782-51tkv20a723j0tjd9rgkdonmcvsg98uh.apps.googleusercontent.com';               // ← Google Sign-InのクライアントID
+const GAS_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec'; // ← デプロイ後のURLに書き換える
+const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';               // ← Google Sign-InのクライアントID
 
 /* ===================== 状態 ===================== */
 let idToken = null;
@@ -442,20 +442,44 @@ function buildRow(item) {
   return row;
 }
 
-function togglePlay(item, row) {
+async function togglePlay(item, row) {
   let audioWrap = row.querySelector('.row-audio');
   if (audioWrap) {
+    const existingAudio = audioWrap.querySelector('audio');
+    if (existingAudio && existingAudio.src) URL.revokeObjectURL(existingAudio.src);
     audioWrap.remove();
     return;
   }
+
   audioWrap = document.createElement('div');
   audioWrap.className = 'row-audio';
-  const audio = document.createElement('audio');
-  audio.controls = true;
-  audio.autoplay = true;
-  audio.src = GAS_URL + '?action=file&fileId=' + encodeURIComponent(item.fileId) + '&idToken=' + encodeURIComponent(idToken);
-  audioWrap.appendChild(audio);
+  audioWrap.textContent = '読み込み中…';
   row.appendChild(audioWrap);
+
+  try {
+    // <audio src=直接URL> はGAS側がRangeリクエストに対応していないため
+    // iOS Safariで再生エラーになることがある。fetchで全体を取得してから
+    // ローカルのBlob URLとして再生することで回避する。
+    const url = GAS_URL + '?action=file&fileId=' + encodeURIComponent(item.fileId) + '&idToken=' + encodeURIComponent(idToken);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    if (blob.type && blob.type.indexOf('text') !== -1) {
+      // 認証エラー時などはテキストが返ってくる
+      const text = await blob.text();
+      throw new Error(text);
+    }
+    const objectUrl = URL.createObjectURL(blob);
+
+    audioWrap.textContent = '';
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.autoplay = true;
+    audio.src = objectUrl;
+    audioWrap.appendChild(audio);
+  } catch (err) {
+    audioWrap.textContent = '再生に失敗しました: ' + err.message;
+  }
 }
 
 async function deleteItem(item, row) {
