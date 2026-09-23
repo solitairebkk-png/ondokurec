@@ -205,8 +205,14 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbwLThrE-AymgO1ksrhl8Ri6
 const CLIENT_ID = '309341085782-51tkv20a723j0tjd9rgkdonmcvsg98uh.apps.googleusercontent.com';
 
 /* ===================== 状態 ===================== */
-let idToken = null;
+// authToken: サーバーへのすべてのリクエストで使う認証トークン。
+// 初回はGoogleログインの直後に発行される「長期セッショントークン」に
+// 交換し、端末のlocalStorageに保存する（以後180日はログイン不要）。
+let authToken = null;
 let userEmail = null;
+
+const STORAGE_TOKEN_KEY = 'ondoku_session_token';
+const STORAGE_EMAIL_KEY = 'ondoku_session_email';
 
 let mediaRecorder = null;
 let recordedChunks = [];
@@ -217,7 +223,15 @@ let pendingMimeType = null;
 
 /* ===================== サインイン ===================== */
 window.onload = function () {
-  if (window.google && google.accounts) {
+  const savedToken = safeLocalStorageGet_(STORAGE_TOKEN_KEY);
+  const savedEmail = safeLocalStorageGet_(STORAGE_EMAIL_KEY);
+
+  if (savedToken) {
+    // 端末に保存済みのトークンがあれば、Googleログインをスキップしてそのまま復帰
+    authToken = savedToken;
+    userEmail = savedEmail;
+    showLoggedInUI_();
+  } else if (window.google && google.accounts) {
     google.accounts.id.initialize({
       client_id: CLIENT_ID,
       callback: handleCredentialResponse,
@@ -232,18 +246,68 @@ window.onload = function () {
   registerServiceWorker();
 };
 
-function handleCredentialResponse(response) {
-  idToken = response.credential;
-  try {
-    const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
-    userEmail = payload.email;
-  } catch (e) { userEmail = null; }
+async function handleCredentialResponse(response) {
+  const googleIdToken = response.credential;
 
+  document.getElementById('whoami').textContent = 'ログイン確認中…';
+  try {
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'login', idToken: googleIdToken })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'ログインに失敗しました');
+
+    authToken = data.token;
+    userEmail = data.email;
+    safeLocalStorageSet_(STORAGE_TOKEN_KEY, authToken);
+    safeLocalStorageSet_(STORAGE_EMAIL_KEY, userEmail);
+
+    showLoggedInUI_();
+  } catch (err) {
+    document.getElementById('whoami').textContent = 'ログインに失敗しました: ' + err.message;
+  }
+}
+
+function showLoggedInUI_() {
   document.getElementById('login-gate').style.display = 'none';
   document.getElementById('recorder-card').style.display = 'block';
-  document.getElementById('whoami').textContent = userEmail ? ('ログイン中: ' + userEmail) : '';
+  document.getElementById('signin-bar').style.display = 'none';
+  document.getElementById('whoami').innerHTML =
+    'ログイン中: ' + (userEmail || '') +
+    ' <a href="#" id="logout-link" style="color:inherit;">（ログアウト）</a>';
+  const logoutLink = document.getElementById('logout-link');
+  if (logoutLink) logoutLink.addEventListener('click', function (e) { e.preventDefault(); logout_(); });
 
   refreshList();
+}
+
+function logout_() {
+  safeLocalStorageRemove_(STORAGE_TOKEN_KEY);
+  safeLocalStorageRemove_(STORAGE_EMAIL_KEY);
+  location.reload();
+}
+
+// このアプリはホーム画面PWAとしても使うため、localStorageが使えない
+// 状況（プライベートブラウズ等）でも落ちないようにガードしておく
+function safeLocalStorageGet_(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function safeLocalStorageSet_(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) {}
+}
+function safeLocalStorageRemove_(key) {
+  try { localStorage.removeItem(key); } catch (e) {}
+}
+
+// サーバーが「認証エラー」を返した場合（トークン失効など）に呼ぶ。
+// 保存済みトークンを消してログイン画面に戻す。
+function handleAuthError_() {
+  safeLocalStorageRemove_(STORAGE_TOKEN_KEY);
+  safeLocalStorageRemove_(STORAGE_EMAIL_KEY);
+  alert('ログインの有効期限が切れました。もう一度ログインしてください。');
+  location.reload();
 }
 
 /* ===================== 録音 ===================== */
@@ -352,7 +416,7 @@ async function uploadRecording(blob, mimeType, startAt) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // プリフライト回避
       body: JSON.stringify({
         action: 'upload',
-        idToken: idToken,
+        token: authToken,
         date: startAt.dateStr,
         time: startAt.timeStr,
         mimeType: mimeType,
@@ -360,7 +424,10 @@ async function uploadRecording(blob, mimeType, startAt) {
       })
     });
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || '保存に失敗しました');
+    if (!data.ok) {
+      if (isAuthError_(data.error)) return handleAuthError_();
+      throw new Error(data.error || '保存に失敗しました');
+    }
     document.getElementById('rec-status').textContent = '保存しました';
     document.getElementById('rec-timer').textContent = '00:00';
     pendingBlob = null;
@@ -371,13 +438,20 @@ async function uploadRecording(blob, mimeType, startAt) {
   }
 }
 
+function isAuthError_(errorText) {
+  return typeof errorText === 'string' && errorText.indexOf('auth:') === 0;
+}
+
 async function refreshList() {
-  if (!idToken) return;
+  if (!authToken) return;
   try {
-    const url = GAS_URL + '?action=list&idToken=' + encodeURIComponent(idToken);
+    const url = GAS_URL + '?action=list&token=' + encodeURIComponent(authToken);
     const res = await fetch(url);
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || '取得に失敗しました');
+    if (!data.ok) {
+      if (isAuthError_(data.error)) return handleAuthError_();
+      throw new Error(data.error || '取得に失敗しました');
+    }
     renderList(data.items);
   } catch (err) {
     console.error(err);
@@ -460,10 +534,13 @@ async function togglePlay(item, row) {
     // 音声データはJSON(base64)経由で取得する
     // （バイナリを直接fetchするとGAS側のCORSの都合で失敗することがあるため、
     //   一覧取得などと同じJSON方式に統一している）
-    const url = GAS_URL + '?action=file&fileId=' + encodeURIComponent(item.fileId) + '&idToken=' + encodeURIComponent(idToken);
+    const url = GAS_URL + '?action=file&fileId=' + encodeURIComponent(item.fileId) + '&token=' + encodeURIComponent(authToken);
     const res = await fetch(url);
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || '取得に失敗しました');
+    if (!data.ok) {
+      if (isAuthError_(data.error)) return handleAuthError_();
+      throw new Error(data.error || '取得に失敗しました');
+    }
 
     const bytes = base64ToBytes_(data.base64);
     const blob = new Blob([bytes], { type: data.mimeType || 'audio/mp4' });
@@ -493,10 +570,13 @@ async function deleteItem(item, row) {
     const res = await fetch(GAS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'delete', idToken: idToken, id: item.id })
+      body: JSON.stringify({ action: 'delete', token: authToken, id: item.id })
     });
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || '削除に失敗しました');
+    if (!data.ok) {
+      if (isAuthError_(data.error)) return handleAuthError_();
+      throw new Error(data.error || '削除に失敗しました');
+    }
     row.remove();
   } catch (err) {
     alert('削除に失敗しました: ' + err.message);
