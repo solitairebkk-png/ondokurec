@@ -220,6 +220,7 @@ let recordStartAt = null;   // {dateStr, timeStr, ms}
 let timerInterval = null;
 let pendingBlob = null;
 let pendingMimeType = null;
+let startingRecording = false; // マイク許可待ちなどの間の二重開始を防ぐ
 
 /* ===================== サインイン ===================== */
 window.onload = function () {
@@ -329,6 +330,7 @@ document.getElementById('rec-btn').addEventListener('click', function () {
   }
 });
 document.getElementById('discard-btn').addEventListener('click', function () {
+  stopTimer();
   pendingBlob = null;
   document.getElementById('save-row').style.display = 'none';
   document.getElementById('rec-status').textContent = 'ボタンを押すと録音がはじまります';
@@ -340,6 +342,9 @@ document.getElementById('save-btn').addEventListener('click', function () {
 });
 
 async function startRecording() {
+  // マイク許可待ちの間にボタンを連打しても、録音とタイマーが二重に作られないようにする
+  if (startingRecording || (mediaRecorder && mediaRecorder.state === 'recording')) return;
+  startingRecording = true;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mimeType = pickMimeType();
@@ -354,6 +359,10 @@ async function startRecording() {
       if (e.data && e.data.size > 0) recordedChunks.push(e.data);
     };
     mediaRecorder.onstop = function () {
+      // 通話の着信やアプリの切り替えなどで録音が自動的に止まった場合も、
+      // ここでタイマーとボタン表示を必ず止める
+      stopTimer();
+      resetRecButtonUi_();
       stream.getTracks().forEach(t => t.stop());
       pendingBlob = new Blob(recordedChunks, { type: pendingMimeType });
       document.getElementById('save-row').style.display = 'flex';
@@ -367,7 +376,11 @@ async function startRecording() {
     document.getElementById('save-row').style.display = 'none';
     startTimer();
   } catch (err) {
+    stopTimer();
+    resetRecButtonUi_();
     alert('マイクを使用できませんでした: ' + err.message);
+  } finally {
+    startingRecording = false;
   }
 }
 
@@ -375,12 +388,17 @@ function stopRecording() {
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     mediaRecorder.stop();
   }
-  document.getElementById('rec-btn').textContent = '録音開始';
-  document.getElementById('rec-btn').classList.remove('recording');
+  resetRecButtonUi_();
   stopTimer();
 }
 
+function resetRecButtonUi_() {
+  document.getElementById('rec-btn').textContent = '録音開始';
+  document.getElementById('rec-btn').classList.remove('recording');
+}
+
 function startTimer() {
+  stopTimer(); // 念のため前のタイマーを必ず止めてから新しく始める
   const startedMs = Date.now();
   timerInterval = setInterval(function () {
     const sec = Math.floor((Date.now() - startedMs) / 1000);
@@ -390,7 +408,10 @@ function startTimer() {
   }, 250);
 }
 function stopTimer() {
-  clearInterval(timerInterval);
+  if (timerInterval !== null) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
 }
 
 /* ===================== アップロード / 一覧 / 削除 ===================== */
@@ -428,6 +449,7 @@ async function uploadRecording(blob, mimeType, startAt) {
       if (isAuthError_(data.error)) return handleAuthError_();
       throw new Error(data.error || '保存に失敗しました');
     }
+    stopTimer();
     document.getElementById('rec-status').textContent = '保存しました';
     document.getElementById('rec-timer').textContent = '00:00';
     pendingBlob = null;
