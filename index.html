@@ -115,6 +115,21 @@
   }
   #save-btn{background:var(--accent);color:#fff;}
   #discard-btn{background:#eee;color:var(--ink);}
+  #rec-info{
+    display:none;
+    margin-top:12px;
+    font-size:13px;
+    color:var(--sub);
+    line-height:1.6;
+  }
+  #rec-info.warn{color:var(--danger);font-weight:600;}
+  #rec-diag{
+    margin-top:6px;
+    font-size:11px;
+    color:var(--sub);
+    word-break:break-all;
+  }
+  #preview-audio{display:none;width:100%;margin-top:10px;}
 
   .date-heading{
     font-size:13px;
@@ -186,6 +201,9 @@
     <button id="rec-btn">録音開始</button>
     <div id="rec-timer">00:00</div>
     <div id="rec-status">ボタンを押すと録音がはじまります</div>
+    <div id="rec-info"></div>
+    <audio id="preview-audio" controls playsinline></audio>
+    <div id="rec-diag"></div>
     <div id="save-row">
       <button id="discard-btn">やり直す</button>
       <button id="save-btn">保存する</button>
@@ -221,6 +239,12 @@ let timerInterval = null;
 let pendingBlob = null;
 let pendingMimeType = null;
 let startingRecording = false; // マイク許可待ちなどの間の二重開始を防ぐ
+let userStopped = false;       // 自分で「停止」を押したか（押していなければ途中で自動停止）
+let recStartMs = 0;
+let recDiag = [];              // 録音中に起きた出来事（止まった原因の調査用）
+let recordLooksBroken = false; // 途中で止まった疑いのある録音か
+let wakeLock = null;
+let previewUrl = null;
 
 /* ===================== サインイン ===================== */
 window.onload = function () {
@@ -331,6 +355,7 @@ document.getElementById('rec-btn').addEventListener('click', function () {
 });
 document.getElementById('discard-btn').addEventListener('click', function () {
   stopTimer();
+  clearPreview_();
   pendingBlob = null;
   document.getElementById('save-row').style.display = 'none';
   document.getElementById('rec-status').textContent = 'ボタンを押すと録音がはじまります';
@@ -338,43 +363,144 @@ document.getElementById('discard-btn').addEventListener('click', function () {
 });
 document.getElementById('save-btn').addEventListener('click', function () {
   if (!pendingBlob) return;
+  if (recordLooksBroken && !confirm('この録音は途中で止まっています。このまま保存しますか？')) return;
   uploadRecording(pendingBlob, pendingMimeType, recordStartAt);
 });
+
+function diagNote_(text) {
+  const sec = recStartMs ? ((Date.now() - recStartMs) / 1000).toFixed(1) : '0.0';
+  recDiag.push(sec + '秒 ' + text);
+}
+
+function fmtSec_(sec) {
+  sec = Math.max(0, Math.round(sec));
+  return String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0');
+}
+
+async function requestWakeLock_() {
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { wakeLock = null; }
+}
+function releaseWakeLock_() {
+  try { if (wakeLock) wakeLock.release(); } catch (e) {}
+  wakeLock = null;
+}
+
+// 録音中に画面が切り替わった・消えた場合は記録に残す（原因調査用）
+document.addEventListener('visibilitychange', function () {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    diagNote_(document.hidden ? '画面が切り替わった/消えた' : '画面に戻った');
+  }
+});
+
+function clearPreview_() {
+  const audio = document.getElementById('preview-audio');
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.style.display = 'none';
+  if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+  const info = document.getElementById('rec-info');
+  info.style.display = 'none';
+  info.className = '';
+  info.textContent = '';
+  document.getElementById('rec-diag').textContent = '';
+  recordLooksBroken = false;
+}
+
+function showRecordResult_(durMs, autoStopped) {
+  const info = document.getElementById('rec-info');
+  const audio = document.getElementById('preview-audio');
+  const wallSec = durMs / 1000;
+  const sizeKb = Math.round(pendingBlob.size / 1024);
+
+  function setInfo(text, warn) {
+    info.textContent = text;
+    info.className = warn ? 'warn' : '';
+    info.style.display = 'block';
+  }
+
+  recordLooksBroken = autoStopped;
+  if (autoStopped) {
+    setInfo('⚠ 録音が途中で止まりました（' + fmtSec_(wallSec) + ' で停止・' + sizeKb + 'KB）', true);
+  } else if (wallSec < 5) {
+    setInfo('⚠ 録音がとても短いです（' + fmtSec_(wallSec) + '・' + sizeKb + 'KB）', true);
+  } else {
+    setInfo('録音時間 ' + fmtSec_(wallSec) + '（' + sizeKb + 'KB）', false);
+  }
+
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(pendingBlob);
+  audio.onloadedmetadata = function () {
+    const d = audio.duration;
+    // ボタンを押していた時間より音声が明らかに短ければ、途中で切れている
+    if (isFinite(d) && d > 0 && wallSec - d > 3) {
+      recordLooksBroken = true;
+      setInfo('⚠ 録音していた時間（' + fmtSec_(wallSec) + '）より音声が短い（' + fmtSec_(d) + '）です。途中で切れています', true);
+    }
+  };
+  audio.src = previewUrl;
+  audio.style.display = 'block';
+
+  document.getElementById('rec-diag').textContent =
+    recDiag.length ? '記録: ' + recDiag.join(' / ') : '';
+  document.getElementById('save-row').style.display = 'flex';
+  document.getElementById('rec-status').textContent =
+    recordLooksBroken ? '聞き直して、問題があれば「やり直す」を押してください' : '聞き直して、よければ保存してください';
+}
 
 async function startRecording() {
   // マイク許可待ちの間にボタンを連打しても、録音とタイマーが二重に作られないようにする
   if (startingRecording || (mediaRecorder && mediaRecorder.state === 'recording')) return;
   startingRecording = true;
   try {
+    clearPreview_();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mimeType = pickMimeType();
     recordedChunks = [];
+    userStopped = false;
+    recDiag = [];
     mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     pendingMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
 
     const now = new Date();
     recordStartAt = { dateStr: formatDate(now), timeStr: formatTime(now) };
+    recStartMs = Date.now();
+
+    // マイクの状態の変化を記録（止まった原因の手がかりにする）
+    stream.getAudioTracks().forEach(function (t) {
+      t.addEventListener('ended', function () { diagNote_('マイクが切断された'); });
+      t.addEventListener('mute', function () { diagNote_('マイクが一時停止された'); });
+      t.addEventListener('unmute', function () { diagNote_('マイクが再開した'); });
+    });
+    mediaRecorder.onerror = function (e) {
+      diagNote_('録音エラー ' + ((e && e.error && e.error.name) || ''));
+    };
 
     mediaRecorder.ondataavailable = function (e) {
       if (e.data && e.data.size > 0) recordedChunks.push(e.data);
     };
     mediaRecorder.onstop = function () {
+      const durMs = Date.now() - recStartMs;
       // 通話の着信やアプリの切り替えなどで録音が自動的に止まった場合も、
       // ここでタイマーとボタン表示を必ず止める
       stopTimer();
       resetRecButtonUi_();
+      releaseWakeLock_();
       stream.getTracks().forEach(t => t.stop());
       pendingBlob = new Blob(recordedChunks, { type: pendingMimeType });
-      document.getElementById('save-row').style.display = 'flex';
-      document.getElementById('rec-status').textContent = '保存しますか？';
+      showRecordResult_(durMs, !userStopped);
     };
 
-    mediaRecorder.start();
+    mediaRecorder.start(1000); // 1秒ごとに区切って受け取る（途中で止まっても残りやすい）
     document.getElementById('rec-btn').textContent = '停止';
     document.getElementById('rec-btn').classList.add('recording');
     document.getElementById('rec-status').textContent = '録音中…';
     document.getElementById('save-row').style.display = 'none';
     startTimer();
+    requestWakeLock_(); // 録音中は画面が暗くならないようにする
   } catch (err) {
     stopTimer();
     resetRecButtonUi_();
@@ -385,6 +511,7 @@ async function startRecording() {
 }
 
 function stopRecording() {
+  userStopped = true;
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     mediaRecorder.stop();
   }
@@ -450,6 +577,7 @@ async function uploadRecording(blob, mimeType, startAt) {
       throw new Error(data.error || '保存に失敗しました');
     }
     stopTimer();
+    clearPreview_();
     document.getElementById('rec-status').textContent = '保存しました';
     document.getElementById('rec-timer').textContent = '00:00';
     pendingBlob = null;
@@ -588,6 +716,7 @@ function base64ToBytes_(base64) {
 
 async function deleteItem(item, row) {
   if (!confirm(item.date + ' ' + item.time + ' の録音を削除しますか？')) return;
+  if (!confirm('本当に削除しますか？（音声ファイルはGoogleドライブのゴミ箱に移り、アプリの一覧からは消えます）')) return;
   try {
     const res = await fetch(GAS_URL, {
       method: 'POST',
@@ -599,7 +728,17 @@ async function deleteItem(item, row) {
       if (isAuthError_(data.error)) return handleAuthError_();
       throw new Error(data.error || '削除に失敗しました');
     }
+    // 行を消したあと、その日の録音が無くなったら日付の見出しも消す
+    let heading = row.previousElementSibling;
+    while (heading && !heading.classList.contains('date-heading')) heading = heading.previousElementSibling;
     row.remove();
+    if (heading) {
+      const next = heading.nextElementSibling;
+      if (!next || !next.classList.contains('rec-row')) heading.remove();
+    }
+    if (!document.querySelector('#list-area .rec-row')) {
+      document.getElementById('empty').style.display = 'block';
+    }
   } catch (err) {
     alert('削除に失敗しました: ' + err.message);
   }
