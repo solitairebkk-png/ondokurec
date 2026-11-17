@@ -167,6 +167,8 @@
   }
   .row-time{font-size:15px;font-weight:600;}
   .row-by{font-size:11px;color:var(--sub);}
+  .row-dur{font-size:12px;font-weight:400;color:var(--sub);margin-left:8px;}
+  .row-dur.short{color:var(--danger);font-weight:700;}
   .row-audio{
     flex-basis:100%;
     margin-top:8px;
@@ -245,6 +247,7 @@ let recDiag = [];              // 録音中に起きた出来事（止まった�
 let recordLooksBroken = false; // 途中で止まった疑いのある録音か
 let wakeLock = null;
 let previewUrl = null;
+let pendingDurationSec = null; // 保存する録音の実際の音声の長さ（秒）
 
 /* ===================== サインイン ===================== */
 window.onload = function () {
@@ -364,7 +367,7 @@ document.getElementById('discard-btn').addEventListener('click', function () {
 document.getElementById('save-btn').addEventListener('click', function () {
   if (!pendingBlob) return;
   if (recordLooksBroken && !confirm('この録音は途中で止まっています。このまま保存しますか？')) return;
-  uploadRecording(pendingBlob, pendingMimeType, recordStartAt);
+  uploadRecording(pendingBlob, pendingMimeType, recordStartAt, pendingDurationSec);
 });
 
 function diagNote_(text) {
@@ -408,6 +411,7 @@ function clearPreview_() {
   info.textContent = '';
   document.getElementById('rec-diag').textContent = '';
   recordLooksBroken = false;
+  pendingDurationSec = null;
 }
 
 function showRecordResult_(durMs, autoStopped) {
@@ -423,6 +427,7 @@ function showRecordResult_(durMs, autoStopped) {
   }
 
   recordLooksBroken = autoStopped;
+  pendingDurationSec = Math.round(wallSec * 10) / 10; // 音声の長さが読めない場合の代わり
   if (autoStopped) {
     setInfo('⚠ 録音が途中で止まりました（' + fmtSec_(wallSec) + ' で停止・' + sizeKb + 'KB）', true);
   } else if (wallSec < 5) {
@@ -435,6 +440,7 @@ function showRecordResult_(durMs, autoStopped) {
   previewUrl = URL.createObjectURL(pendingBlob);
   audio.onloadedmetadata = function () {
     const d = audio.duration;
+    if (isFinite(d) && d > 0) pendingDurationSec = Math.round(d * 10) / 10; // 実際の音声の長さ
     // ボタンを押していた時間より音声が明らかに短ければ、途中で切れている
     if (isFinite(d) && d > 0 && wallSec - d > 3) {
       recordLooksBroken = true;
@@ -554,7 +560,7 @@ function blobToBase64(blob) {
   });
 }
 
-async function uploadRecording(blob, mimeType, startAt) {
+async function uploadRecording(blob, mimeType, startAt, durationSec) {
   document.getElementById('rec-status').textContent = '保存中…';
   document.getElementById('save-row').style.display = 'none';
   const base64 = await blobToBase64(blob);
@@ -568,6 +574,7 @@ async function uploadRecording(blob, mimeType, startAt) {
         date: startAt.dateStr,
         time: startAt.timeStr,
         mimeType: mimeType,
+        durationSec: (durationSec === null || durationSec === undefined) ? '' : durationSec,
         base64: base64
       })
     });
@@ -658,8 +665,19 @@ function buildRow(item) {
   const meta = document.createElement('div');
   meta.className = 'row-meta';
   meta.innerHTML =
-    '<div class="row-time">' + item.time + '</div>' +
+    '<div class="row-time">' + item.time + '<span class="row-dur"></span></div>' +
     '<div class="row-by">' + (item.uploadedBy || '') + '</div>';
+  // 録音の長さを表示（長さが記録されていない古い録音は「長さ不明」）
+  const dur = meta.querySelector('.row-dur');
+  const sec = Number(item.durationSec);
+  if (item.durationSec === '' || item.durationSec === undefined || item.durationSec === null || !isFinite(sec)) {
+    dur.textContent = '長さ不明';
+  } else if (sec < 5) {
+    dur.textContent = '⚠ ' + fmtSec_(sec) + '（短い）';
+    dur.className = 'row-dur short';
+  } else {
+    dur.textContent = fmtSec_(sec);
+  }
 
   row.appendChild(actions);
   row.appendChild(meta);
